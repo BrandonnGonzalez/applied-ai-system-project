@@ -4,10 +4,11 @@ import sys
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
-# Make the embedder importable whether we're run from the project root (via
-# `python -m src.main`) or directly from the src/ directory.
+# Make sibling modules (embedder, guards) importable whether we're run from
+# the project root or directly from the src/ directory.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from embedder import compute_semantic_scores, MODEL_NAME  # noqa: E402
+from guards import validate_user_prefs, validate_recommendation_output, InputValidationError  # noqa: E402
 
 # ── Hybrid scoring weights ────────────────────────────────────────────────────
 # The final score blends neural semantic similarity with the explicit
@@ -76,8 +77,11 @@ class Recommender:
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
         preferences = _user_profile_to_prefs(user)
-        song_dicts = [_song_to_dict(s) for s in self.songs]
 
+        # Input guard: raises InputValidationError on invalid preferences.
+        validate_user_prefs(preferences)
+
+        song_dicts = [_song_to_dict(s) for s in self.songs]
         semantic_scores = compute_semantic_scores(preferences, song_dicts)
 
         scored: List[Tuple[float, Song]] = []
@@ -97,6 +101,10 @@ class Recommender:
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         preferences = _user_profile_to_prefs(user)
+
+        # Input guard: raises InputValidationError on invalid preferences.
+        validate_user_prefs(preferences)
+
         song_data = _song_to_dict(song)
         rule_score, reasons = score_song(preferences, song_data)
         rule_norm = min(rule_score / _MAX_RULE_SCORE, 1.0)
@@ -192,14 +200,23 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
     """
     Hybrid recommender: combines neural semantic similarity with rule-based scoring.
 
-    Scoring formula (per song):
-      semantic_norm  = cosine_similarity(user_query_embed, song_embed)  → [0, 1]
-      rule_norm      = rule_score / MAX_RULE_SCORE                       → [0, 1]
-      final_score    = 0.6 * semantic_norm + 0.4 * rule_norm
+    Pipeline
+    --------
+    1. Input guard  — validates user_prefs via guardrails-ai before any inference.
+    2. Scoring      — 60% semantic (all-MiniLM-L6-v2) + 40% rule-based.
+    3. Output guard — clamps scores to [0,1] and ensures explanations are non-trivial.
 
-    Falls back to pure rule-based scoring if sentence-transformers is unavailable.
+    Raises
+    ------
+    InputValidationError
+        If user_prefs fails the input guard (bad ranges, missing required fields, etc.).
+
     Required by src/main.py
     """
+    # ── 1. Input guard ────────────────────────────────────────────────────────
+    validate_user_prefs(user_prefs)
+
+    # ── 2. Hybrid scoring ─────────────────────────────────────────────────────
     semantic_scores = compute_semantic_scores(user_prefs, songs)
 
     ranked: List[Tuple[Dict, float, str]] = []
@@ -224,7 +241,10 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
         ranked.append((song, final_score, explanation))
 
     ranked.sort(key=lambda item: item[1], reverse=True)
-    return ranked[:k]
+    top_k = ranked[:k]
+
+    # ── 3. Output guard ───────────────────────────────────────────────────────
+    return validate_recommendation_output(top_k)
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
