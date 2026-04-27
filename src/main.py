@@ -1,38 +1,50 @@
 """
-Command line runner for the Music Recommender Simulation.
+Music Recommender — hybrid neural + rule-based CLI runner.
 
-This file helps you quickly run and test your recommender.
-
-You will implement the functions in recommender.py:
-- load_songs
-- score_song
-- recommend_songs
+Recommendations are produced by blending two scoring signals:
+  • Semantic similarity  (60%) — all-MiniLM-L6-v2 sentence-transformer model,
+    fine-tuned on 1B+ sentence pairs, understands genre/mood relationships
+    the rule-based scorer misses (e.g. "indie pop" ≈ "pop", "chill" ≈ "relaxed").
+  • Rule-based score     (40%) — explicit feature matching on energy, tempo,
+    valence, acousticness, and genre.
 """
 
+import sys
+import os
+
+# Allow `from recommender import ...` to resolve to src/recommender.py
+# when this file is run directly (python src/main.py) from the project root.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from recommender import load_songs, recommend_songs
+from embedder import MODEL_NAME
 
 
 def main() -> None:
-    songs = load_songs("data/songs.csv") 
+    print(f"\nLoading semantic model: {MODEL_NAME} ...")
+    songs = load_songs("data/songs.csv")
 
-    # Starter example profile
+    # Starter example profile — swap in any values to explore the hybrid scorer
     user_prefs = {
         "favorite_genre": "pop",
         "favorite_mood": "happy",
         "target_energy": 0.8,
         "target_tempo": 120,
         "target_valence": 0.85,
+        "likes_acoustic": False,
     }
+
+    print("\nUser preferences:")
+    for key, value in user_prefs.items():
+        print(f"  {key}: {value}")
 
     recommendations = recommend_songs(user_prefs, songs, k=5)
 
-    print("\nTop recommendations:\n")
-    for rec in recommendations:
-        # You decide the structure of each returned item.
-        # A common pattern is: (song, score, explanation)
-        song, score, explanation = rec
-        print(f"{song['title']} - Score: {score:.2f}")
-        print(f"Because: {explanation}")
+    print("\n── Top 5 Recommendations ──────────────────────────────────────────────\n")
+    for rank, (song, score, explanation) in enumerate(recommendations, start=1):
+        print(f"#{rank}  {song['title']} — {song['artist']}  [{song['genre']} / {song['mood']}]")
+        print(f"    Score: {score:.3f}")
+        print(f"    {explanation}")
         print()
 
 

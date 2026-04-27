@@ -1,6 +1,27 @@
 import csv
-from typing import List, Dict, Tuple
+import os
+import sys
+from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
+
+# Make the embedder importable whether we're run from the project root (via
+# `python -m src.main`) or directly from the src/ directory.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from embedder import compute_semantic_scores, MODEL_NAME  # noqa: E402
+
+# ── Hybrid scoring weights ────────────────────────────────────────────────────
+# The final score blends neural semantic similarity with the explicit
+# rule-based feature score. Semantic carries more weight because it captures
+# relationships the rule-based scorer misses (e.g. "indie pop" ≈ "pop",
+# "chill" ≈ "relaxed", mood nuance, etc.).
+_SEMANTIC_WEIGHT = 0.6
+_RULE_WEIGHT = 0.4
+# Maximum achievable rule-based score (genre 2.0 + energy 1.0 + tempo 0.5
+# + valence 0.5 + acoustic 1.0) used to normalize rule scores to [0, 1].
+_MAX_RULE_SCORE = 5.0
+
+
+# ── Data classes ──────────────────────────────────────────────────────────────
 
 @dataclass
 class Song:
@@ -19,6 +40,7 @@ class Song:
     danceability: float
     acousticness: float
 
+
 @dataclass
 class UserProfile:
     """
@@ -32,39 +54,73 @@ class UserProfile:
     target_valence: float
     likes_acoustic: bool
 
+
+# ── OOP Recommender ───────────────────────────────────────────────────────────
+
 class Recommender:
     """
     OOP implementation of the recommendation logic.
     Required by tests/test_recommender.py
+
+    Uses a hybrid scoring strategy:
+      final_score = 0.6 * semantic_similarity + 0.4 * normalised_rule_score
+
+    The semantic component comes from all-MiniLM-L6-v2, a sentence-transformer
+    fine-tuned on 1B+ sentence pairs. Songs and the user query are described in
+    natural language, embedded, and compared with cosine similarity. This lets
+    the system understand that "indie pop" ≈ "pop", "serene" ≈ "calm", etc.
     """
+
     def __init__(self, songs: List[Song]):
         self.songs = songs
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
         preferences = _user_profile_to_prefs(user)
-        scored_songs = []
+        song_dicts = [_song_to_dict(s) for s in self.songs]
 
-        for song in self.songs:
-            song_data = _song_to_dict(song)
-            score, _ = score_song(preferences, song_data)
-            scored_songs.append((score, song))
+        semantic_scores = compute_semantic_scores(preferences, song_dicts)
 
-        scored_songs.sort(key=lambda item: item[0], reverse=True)
-        return [song for _, song in scored_songs[:k]]
+        scored: List[Tuple[float, Song]] = []
+        for i, song in enumerate(self.songs):
+            rule_score, _ = score_song(preferences, song_dicts[i])
+            rule_norm = min(rule_score / _MAX_RULE_SCORE, 1.0)
+
+            if semantic_scores is not None:
+                final = _SEMANTIC_WEIGHT * semantic_scores[i] + _RULE_WEIGHT * rule_norm
+            else:
+                final = rule_norm
+
+            scored.append((final, song))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [song for _, song in scored[:k]]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         preferences = _user_profile_to_prefs(user)
         song_data = _song_to_dict(song)
-        score, reasons = score_song(preferences, song_data)
+        rule_score, reasons = score_song(preferences, song_data)
+        rule_norm = min(rule_score / _MAX_RULE_SCORE, 1.0)
 
-        explanation = f"Score: {score:.2f}."
-        if reasons:
-            explanation += " Reasons: " + ", ".join(reasons)
+        sem_scores = compute_semantic_scores(preferences, [song_data])
+        if sem_scores is not None:
+            sem_norm = sem_scores[0]
+            final = _SEMANTIC_WEIGHT * sem_norm + _RULE_WEIGHT * rule_norm
+            explanation = (
+                f"Hybrid score: {final:.2f} "
+                f"(semantic={sem_norm:.2f}, rule={rule_norm:.2f}). "
+            )
         else:
-            explanation += " No strong matches found."
+            explanation = f"Rule-based score: {rule_score:.2f}. "
+
+        if reasons:
+            explanation += "Rule signals: " + ", ".join(reasons)
+        else:
+            explanation += "No strong rule-based matches found."
 
         return explanation
 
+
+# ── Functional API ────────────────────────────────────────────────────────────
 
 def load_songs(csv_path: str) -> List[Dict]:
     """
@@ -92,8 +148,9 @@ def load_songs(csv_path: str) -> List[Dict]:
 
 def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     """
-    Scores a single song against user preferences.
-    Required by recommend_songs() and src/main.py
+    Rule-based score for a single song against user preferences.
+    Required by recommend_songs() and the Recommender class.
+    Returns (raw_score, list_of_reasons).
     """
     score = 0.0
     reasons: List[str] = []
@@ -133,18 +190,44 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
 
 def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
     """
-    Functional implementation of the recommendation logic.
+    Hybrid recommender: combines neural semantic similarity with rule-based scoring.
+
+    Scoring formula (per song):
+      semantic_norm  = cosine_similarity(user_query_embed, song_embed)  → [0, 1]
+      rule_norm      = rule_score / MAX_RULE_SCORE                       → [0, 1]
+      final_score    = 0.6 * semantic_norm + 0.4 * rule_norm
+
+    Falls back to pure rule-based scoring if sentence-transformers is unavailable.
     Required by src/main.py
     """
+    semantic_scores = compute_semantic_scores(user_prefs, songs)
+
     ranked: List[Tuple[Dict, float, str]] = []
-    for song in songs:
-        score, reasons = score_song(user_prefs, song)
-        explanation = ", ".join(reasons) if reasons else "No strong matches found."
-        ranked.append((song, score, explanation))
+    for i, song in enumerate(songs):
+        rule_score, reasons = score_song(user_prefs, song)
+        rule_norm = min(rule_score / _MAX_RULE_SCORE, 1.0)
+
+        if semantic_scores is not None:
+            sem_norm = semantic_scores[i]
+            final_score = _SEMANTIC_WEIGHT * sem_norm + _RULE_WEIGHT * rule_norm
+            rule_summary = ", ".join(reasons) if reasons else "no rule-based matches"
+            explanation = (
+                f"[Hybrid | {MODEL_NAME}] "
+                f"semantic={sem_norm:.2f}, rule={rule_norm:.2f} → score={final_score:.2f}. "
+                f"Rule signals: {rule_summary}."
+            )
+        else:
+            # Graceful fallback: sentence-transformers not installed
+            final_score = rule_norm
+            explanation = ", ".join(reasons) if reasons else "No strong matches found."
+
+        ranked.append((song, final_score, explanation))
 
     ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked[:k]
 
+
+# ── Private helpers ───────────────────────────────────────────────────────────
 
 def _similarity(target: float, value: float, scale: float) -> float:
     difference = abs(target - value)
@@ -177,28 +260,24 @@ def _user_profile_to_prefs(user: UserProfile) -> Dict:
     }
 
 
-
-
-
-
-# Edge case user profiles to test potential logic issues
+# ── Edge case user profiles (for bias/robustness testing) ─────────────────────
 
 CONFLICTING_ENERGY_MOOD = {
     "favorite_genre": "pop",
     "favorite_mood": "sad",
-    "target_energy": 0.9,  # High energy
+    "target_energy": 0.9,
     "target_tempo": 130.0,
-    "target_valence": 0.2,  # Low valence (sad), conflicting with high energy
+    "target_valence": 0.2,
     "likes_acoustic": False,
 }
 
 CONFLICTING_ACOUSTIC_ENERGY = {
     "favorite_genre": "folk",
     "favorite_mood": "chill",
-    "target_energy": 0.95,  # Very high energy
+    "target_energy": 0.95,
     "target_tempo": 120.0,
     "target_valence": 0.5,
-    "likes_acoustic": True,  # Likes acoustic but high energy (conflicting)
+    "likes_acoustic": True,
 }
 
 LOW_VALENCE_HAPPY_MOOD = {
@@ -206,12 +285,12 @@ LOW_VALENCE_HAPPY_MOOD = {
     "favorite_mood": "happy",
     "target_energy": 0.5,
     "target_tempo": 100.0,
-    "target_valence": 0.1,  # Very low valence but happy mood (conflicting)
+    "target_valence": 0.1,
     "likes_acoustic": False,
 }
 
 INVALID_GENRE = {
-    "favorite_genre": "nonexistent_genre",  # Genre that likely doesn't exist in data
+    "favorite_genre": "nonexistent_genre",
     "favorite_mood": "happy",
     "target_energy": 0.7,
     "target_tempo": 120.0,
@@ -222,40 +301,39 @@ INVALID_GENRE = {
 EXTREME_HIGH_VALUES = {
     "favorite_genre": "rock",
     "favorite_mood": "intense",
-    "target_energy": 1.0,  # Maximum energy
-    "target_tempo": 200.0,  # Very high tempo
-    "target_valence": 1.0,  # Maximum valence
+    "target_energy": 1.0,
+    "target_tempo": 200.0,
+    "target_valence": 1.0,
     "likes_acoustic": False,
 }
 
 ALL_ZERO_VALUES = {
     "favorite_genre": "pop",
     "favorite_mood": "neutral",
-    "target_energy": 0.0,  # Minimum energy
-    "target_tempo": 0.0,  # Zero tempo (edge case)
-    "target_valence": 0.0,  # Minimum valence
+    "target_energy": 0.0,
+    "target_tempo": 0.0,
+    "target_valence": 0.0,
     "likes_acoustic": False,
 }
 
 NEGATIVE_VALUES = {
     "favorite_genre": "electronic",
     "favorite_mood": "weird",
-    "target_energy": -0.5,  # Negative energy (invalid but test robustness)
-    "target_tempo": -50.0,  # Negative tempo
-    "target_valence": -0.2,  # Negative valence
+    "target_energy": -0.5,
+    "target_tempo": -50.0,
+    "target_valence": -0.2,
     "likes_acoustic": True,
 }
 
 EMPTY_STRINGS = {
-    "favorite_genre": "",  # Empty genre
-    "favorite_mood": "",  # Empty mood
+    "favorite_genre": "",
+    "favorite_mood": "",
     "target_energy": 0.5,
     "target_tempo": 100.0,
     "target_valence": 0.5,
     "likes_acoustic": False,
 }
 
-# Example user preference dictionaries for testing
 HIGH_ENERGY_POP = {
     "favorite_genre": "pop",
     "favorite_mood": "happy",
