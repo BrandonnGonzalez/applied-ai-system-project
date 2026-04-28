@@ -255,6 +255,30 @@ The bigger lesson was about bias. I expected the system to produce sensible resu
 
 ---
 
+## Critical Reflection
+
+### Limitations and biases
+
+The system has three structural biases. First, genre carries 2× the weight of every other feature in the rule layer, which creates a genre filter bubble — a great jazz track will rarely surface for a user who asked for "lofi" even if energy, tempo, and valence are all near-perfect matches. Second, the 15-song catalog skews toward mainstream pop, rock, and hip-hop, so users requesting niche genres like synthwave or bossa nova get sparse results with no warning about the thin coverage. Third, mood is effectively dormant: because genre and energy dominate the scoring, removing mood entirely from the rule scorer did not change any song's rank. Users who care primarily about emotional vibe — not genre — will get results that ignore their most important preference.
+
+### Could VibeFinder be misused, and how would that be prevented?
+
+The most realistic misuse is **catalog poisoning**: a bad actor who controls songs in the catalog could craft metadata (descriptions, genre strings, energy values) to game the semantic scorer and make their content rank first for nearly every user profile. The current system has no integrity checks on catalog data. A production version would need signed/trusted data ingestion, rate-limiting on catalog updates, and anomaly detection on score distributions to catch songs that rank suspiciously high across unrelated profiles. A secondary concern is preference profiling: the structured `UserProfile` data is precise enough to fingerprint a user's tastes, so any persistent storage of these preferences would need proper access controls and data minimization.
+
+### What was surprising about testing reliability?
+
+The most surprising finding was that the two unit tests — both of which pass — were useless for catching the system's biggest behavioral flaw. The mood-redundancy bug (mood having zero effect on rankings) only appeared through the feature-removal experiment: manually commenting out mood scoring and re-running multiple user profiles. Automated tests verified that the code ran correctly; they said nothing about whether the weights were sensible. This exposed a gap that is easy to overlook: **code correctness and behavioral correctness are measured differently**, and for a recommender system, empirical profiling with diverse user inputs reveals far more than assertion-based unit tests.
+
+### Collaboration with AI during this project
+
+Claude was used throughout the project as a coding partner — for initial scaffolding, debugging the guardrails-ai integration, and refining the hybrid scoring logic.
+
+**Helpful suggestion:** When the output guard was silently swallowing score-clamping events, Claude suggested using `warnings.warn()` rather than a print statement or a raised exception. This was the right call: it surfaces the correction to any caller who has warnings enabled without crashing the pipeline or polluting normal stdout output — a pattern that mirrors how production ML systems surface data quality issues.
+
+**Flawed suggestion:** Claude initially proposed embedding raw numeric feature vectors (energy, tempo, valence as floats) directly into the sentence-transformer model instead of converting songs to natural-language descriptions first. This would have produced poor-quality embeddings because `all-MiniLM-L6-v2` is trained on sentence pairs, not numeric arrays — feeding it `[0.8, 120.0, 0.85]` gives a vector in the right shape but with no meaningful semantic content. Converting features to natural-language descriptions first (`"A high-energy, fast-paced, emotionally positive pop song"`) is what makes the cosine similarity meaningful, and that design came from questioning and overriding Claude's initial proposal.
+
+---
+
 ## Model Card
 
 See [model_card.md](model_card.md) for a full breakdown of intended use, data, strengths, limitations, evaluation methodology, and future work.
