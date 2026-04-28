@@ -1,5 +1,9 @@
 # VibeFinder 1.0 — Hybrid Music Recommender System
 
+
+##LOOM RECORDING: 
+https://www.loom.com/share/1491690a94e3443da85b0b926bd5edaf
+
 ## Original Project
 
 This project started as **Music Recommender Simulation** (CodePath AI110, Module 3). Its original goal was to represent songs and a user "taste profile" as structured data, design a rule-based scoring function to rank songs by how closely they matched user preferences, and reflect on how that mirrors real-world AI recommenders. The starter system scored songs purely by matching explicit features — genre, energy, tempo, valence — with no learned component and no safety guardrails.
