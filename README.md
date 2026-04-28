@@ -1,7 +1,7 @@
 # VibeFinder 1.0 — Hybrid Music Recommender System
 
 
-##LOOM RECORDING: 
+## LOOM RECORDING: 
 https://www.loom.com/share/1491690a94e3443da85b0b926bd5edaf
 
 ## Original Project
