@@ -259,7 +259,7 @@ The bigger lesson was about bias. I expected the system to produce sensible resu
 
 ### Limitations and biases
 
-The system has three structural biases. First, genre carries 2× the weight of every other feature in the rule layer, which creates a genre filter bubble — a great jazz track will rarely surface for a user who asked for "lofi" even if energy, tempo, and valence are all near-perfect matches. Second, the 15-song catalog skews toward mainstream pop, rock, and hip-hop, so users requesting niche genres like synthwave or bossa nova get sparse results with no warning about the thin coverage. Third, mood is effectively dormant: because genre and energy dominate the scoring, removing mood entirely from the rule scorer did not change any song's rank. Users who care primarily about emotional vibe — not genre — will get results that ignore their most important preference.
+The system has three structural biases. First, genre carries 2× the weight of every other feature in the rule layer, which creates a genre filter bubble. For example: a great jazz track will rarely surface for a user who asked for "lofi" even if energy, tempo, and valence are all near-perfect matches. Second, the 15-song catalog skews toward mainstream pop, rock, and hip-hop, so users requesting niche genres like synthwave or bossa nova get sparse results with no warning about the thin coverage. Third, mood is effectively dormant: because genre and energy dominate the scoring, removing mood entirely from the rule scorer did not change any song's rank. Users who care primarily about emotional vibe — not genre — will get results that ignore their most important preference.
 
 ### Could VibeFinder be misused, and how would that be prevented?
 
@@ -271,7 +271,7 @@ The most surprising finding was that the two unit tests — both of which pass �
 
 ### Collaboration with AI during this project
 
-Claude was used throughout the project as a coding partner — for initial scaffolding, debugging the guardrails-ai integration, and refining the hybrid scoring logic.
+I used Claude throughout the project as a coding partner — for initial scaffolding, debugging the guardrails-ai integration, and refining the hybrid scoring logic.
 
 **Helpful suggestion:** When the output guard was silently swallowing score-clamping events, Claude suggested using `warnings.warn()` rather than a print statement or a raised exception. This was the right call: it surfaces the correction to any caller who has warnings enabled without crashing the pipeline or polluting normal stdout output — a pattern that mirrors how production ML systems surface data quality issues.
 
@@ -289,15 +289,15 @@ See [model_card.md](model_card.md) for a full breakdown of intended use, data, s
 
 **Phase 3 — Rule-based scoring baseline**
 
-<img width="736" height="283" alt="Phase 3 screenshot" src="https://github.com/user-attachments/assets/e6461356-d445-4718-b29b-ac761fcda8cf" />
+<img width="736" height="283" alt="Phase 3 screenshot" src="assets/phase3_rule_based_scoring.png" />
 
 **Phase 4 — Hybrid scoring with guardrails**
 
-<img width="759" height="263" alt="Phase 4 screenshot" src="https://github.com/user-attachments/assets/10aac16f-10d2-4929-9356-11c624bc5ce8" />
+<img width="759" height="263" alt="Phase 4 screenshot" src="assets/phase4_hybrid_scoring.png" />
 
 **Feature-removal experiment — mood scoring disabled**
 
-<img width="737" height="308" alt="Feature removal experiment" src="https://github.com/user-attachments/assets/ba49a4c5-e273-4269-8910-c2e6654f9f22" />
+<img width="737" height="308" alt="Feature removal experiment" src="assets/feature_removal_experiment.png" />
 
 Removing mood from the rule scorer did not change any song's rank — only lowered raw scores uniformly — confirming that genre and energy dominate the rule-based component.
 
